@@ -18,8 +18,12 @@ import inspect
 
 from sqlalchemy import and_
 from sqlalchemy import or_
+from sqlalchemy import JSON
+from sqlalchemy import cast
 from sqlalchemy.ext.associationproxy import AssociationProxy
 from sqlalchemy.orm.attributes import InstrumentedAttribute
+
+from sqlalchemy.sql.sqltypes import _resolve_value_to_type
 
 from .helpers import session_query
 from .helpers import get_related_association_proxy_model
@@ -349,6 +353,18 @@ class QueryBuilder(object):
     """
 
     @staticmethod
+    def _find_parent_field(fieldname):
+        if '.' in fieldname:
+            return fieldname.split('.')[-2]
+        return None
+    
+    @staticmethod
+    def _find_last_field(fieldname):
+        if '.' in fieldname:
+            return fieldname.split('.')[-1]
+        return None
+
+    @staticmethod
     def _create_operation(model, fieldname, operator, argument, relation=None):
         """Translates an operation described as a string to a valid SQLAlchemy
         query parameter using a field or relation of the specified model.
@@ -397,7 +413,17 @@ class QueryBuilder(object):
         # because `inspect.getargspec` is deprecated.
         numargs = len(inspect.getargspec(opfunc).args)
         # raises AttributeError if `fieldname` or `relation` does not exist
-        field = getattr(model, relation or fieldname)
+        try:
+            field = getattr(model, relation or fieldname)
+        except AttributeError:
+            childfieldname = QueryBuilder._find_last_field(fieldname)
+            fieldname = QueryBuilder._find_parent_field(fieldname)
+            field = getattr(model, relation or fieldname)
+
+            if field.expression.type._type_affinity.__name__ == "JSON":
+                argType = _resolve_value_to_type(argument)
+                field = field[childfieldname].astext.cast(argType)
+        
         # each of these will raise a TypeError if the wrong number of argments
         # is supplied to `opfunc`.
         if numargs == 1:
